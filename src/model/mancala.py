@@ -4,6 +4,8 @@ from torch import nn, LongTensor, FloatTensor
 from math import sqrt
 from typing import Tuple
 
+from .. import NUM_PITS
+
 from .util import Block, SinusoidalEmbedding, RMSNorm
 
 
@@ -14,7 +16,7 @@ class MancalaTransformer(nn.Module):
 
         emb_scale = sqrt(1 / d_model)
         self.pits_pos_emb = nn.Parameter(
-            torch.empty(1, 2, 6, d_model).normal_(std=emb_scale)
+            torch.empty(1, 2, NUM_PITS, d_model).normal_(std=emb_scale)
         )
         self.score_pos_emb = nn.Parameter(
             torch.empty(1, 2, d_model).normal_(std=emb_scale)
@@ -36,13 +38,14 @@ class MancalaTransformer(nn.Module):
         )
         self.action_value_head = nn.Sequential(
             RMSNorm(d_model),
-            nn.Linear(d_model, 6)
+            nn.Linear(d_model, NUM_PITS)
         )
 
     def forward(self, score: LongTensor, pits: LongTensor) -> Tuple[FloatTensor, FloatTensor]:
+        B = score.shape[0]
         x = torch.concatenate((
-            self.state_value_emb,
-            self.action_value_emb,
+            self.state_value_emb.expand(B, -1, -1),
+            self.action_value_emb.expand(B, -1, -1),
             self.score_pos_emb + self.emb(score),
             (self.pits_pos_emb + self.emb(pits)).flatten(1, 2)
         ), dim=1)
