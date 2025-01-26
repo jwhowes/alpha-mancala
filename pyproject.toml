@@ -1,0 +1,15 @@
+[project]
+name = "alpha-mancala"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "jwhowes", email = "howesjacob8@gmail.com"},
+]
+dependencies = ["numpy>=2.2.2", "torch>=2.5.1", "einops>=0.8.0"]
+requires-python = "==3.12.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
