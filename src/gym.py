@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import torch
 
+from typing import Optional
 from dataclasses import dataclass
-from torch import LongTensor
+from torch import LongTensor, BoolTensor
 
 from . import NUM_PITS
 
@@ -58,11 +59,14 @@ class State:
 
     @property
     def terminal(self) -> bool:
-        return self.pits.max(-1) == 0
+        return self.pits.max() == 0
 
     @property
-    def winner(self) -> 0 | 1 | None:
-        return self.score.argmax() if self.terminal else None
+    def value(self) -> Optional[-1 | 0 | 1]:
+        if self.score[0] == self.score[1]:
+            return 0
+
+        return -2 * self.score.argmax() + 1 if self.terminal else None
 
     @staticmethod
     def initial() -> State:
@@ -70,3 +74,6 @@ class State:
             pits=torch.full((2, NUM_PITS), 4, dtype=torch.long),
             score=torch.full((2,), 0, dtype=torch.long)
         )
+
+    def illegal_moves(self) -> BoolTensor:
+        return self.pits[0] == 0

@@ -7,8 +7,9 @@ import numpy as np
 import warnings
 
 from numpy.typing import NDArray
+from dataclasses import dataclass
 from tqdm import tqdm
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
 from .gym import State
 from .model import MancalaTransformer
@@ -39,26 +40,31 @@ class ModelQueue:
     async def process_queue(self, model: MancalaTransformer):
         await self.queue_full.wait()
 
-        thread_ids = []
-        scores = []
-        pits = []
+        thread_ids: List[int] = []
+        states: List[State] = []
         while not self.queue.empty():
             state, thread_id = await self.queue.get()
 
             if state is not None:
-                scores.append(state.score)
-                pits.append(state.pits)
+                states.append(state)
                 thread_ids.append(thread_id)
 
-        with torch.inference_mode():
-            value, prior = model(
-                torch.stack(scores), torch.stack(pits)
-            )
+        if len(states) > 0:
+            with torch.inference_mode():
+                value, prior = model(
+                    score=torch.stack([
+                        state.score for state in states
+                    ]),
+                    pits=torch.stack([
+                        state.pits for state in states
+                    ])
+                )
 
-        for i, thread_id in enumerate(thread_ids):
-            self.responses[thread_id] = (
-                torch.sigmoid(value[i]).cpu().numpy(), F.softmax(prior[i], dim=-1).cpu().numpy()
-            )
+                for i, (state, thread_id) in enumerate(zip(states, thread_ids)):
+                    prior[i, state.illegal_moves()] = float('-inf')
+                    self.responses[thread_id] = (
+                        torch.sigmoid(value[i]).cpu().numpy(), F.softmax(prior[i], dim=-1).cpu().numpy()
+                    )
 
         self.completed.set()
 
@@ -79,7 +85,7 @@ class Node:
         if self.state.terminal:
             await queue.add_to_queue(None, thread_id)
 
-            return float(self.state.winner)
+            return float(self.state.value)
 
         if self.children is None:
             self.locked = True
@@ -111,17 +117,17 @@ class Node:
         self.num_visits[child_idx] += VIRTUAL_LOSS
         self.total_value[child_idx] -= VIRTUAL_LOSS
 
-        child_value = await self.children[child_idx].search(thread_id, queue)
+        value = await self.children[child_idx].search(thread_id, queue)
 
-        if child_value is not None:
+        if value is not None:
             self.num_visits[child_idx] += 1 - VIRTUAL_LOSS
 
             if self.children[child_idx].state.flipped:
-                child_value = 1 - child_value
+                value = -value
 
-            self.total_value[child_idx] += child_value + VIRTUAL_LOSS
+            self.total_value[child_idx] += value + VIRTUAL_LOSS
 
-        return child_value
+        return value
 
 
 
@@ -161,11 +167,17 @@ class MCTS:
         self.root = self.root.children[action]
 
 
-async def main() -> Tuple[List[State], List[NDArray[np.float32]], List[int]]:
-    warnings.simplefilter("ignore")
+@dataclass
+class GameHistory:
+    scores: NDArray[np.int64]
+    pits: NDArray[np.int64]
 
-    model = MancalaTransformer(256, 4, 4)
+    mcts_probs: NDArray[np.float32]
 
+    results: NDArray[np.float32]
+
+
+async def self_play(model: MancalaTransformer) -> GameHistory:
     mcts = MCTS(model, sims_per_move=50)
 
     states: List[State] = []
@@ -184,18 +196,32 @@ async def main() -> Tuple[List[State], List[NDArray[np.float32]], List[int]]:
 
         pbar.update()
 
-    result = mcts.root.state.winner
+    result = mcts.root.state.value
     assert result is not None
 
     for state in states[::-1]:
-        result = [result] + results
+        results = [result] + results
         if state.flipped:
-            result = 1 - result
+            result = -result
 
-    return states, priors, results
+    return GameHistory(
+        scores=np.stack([
+            state.score for state in states
+        ]).astype(np.int64),
+        pits=np.stack([
+            state.pits for state in states
+        ]).astype(np.int64),
+        mcts_probs=np.stack(priors).astype(np.float32),
+        results=np.stack(results).astype(np.float32)
+    )
 
 
 if __name__ == "__main__":
-    states, priors, results = asyncio.run(main())
+    warnings.simplefilter("ignore")
 
-    print(len(states), len(priors), len(results))
+    model = MancalaTransformer(256, 4, 4)
+
+    history = asyncio.run(self_play(model))
+
+    print(history.results)
+    print(history.scores[-1])

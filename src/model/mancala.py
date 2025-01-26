@@ -34,7 +34,8 @@ class MancalaTransformer(nn.Module):
 
         self.state_value_head = nn.Sequential(
             RMSNorm(d_model),
-            nn.Linear(d_model, 1)
+            nn.Linear(d_model, 1),
+            nn.Tanh()
         )
         self.action_value_head = nn.Sequential(
             RMSNorm(d_model),
