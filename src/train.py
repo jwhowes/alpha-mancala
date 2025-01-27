@@ -99,6 +99,7 @@ class Trainer:
 
     async def train_model(self):
         model = MancalaTransformer.from_config(self.model_config).to(self.device)
+        model.train()
         await self.load_model(model)
 
         opt = torch.optim.AdamW(
@@ -147,11 +148,12 @@ class Trainer:
                 opt.step()
 
             await self.save_model(model)
-            await asyncio.sleep(1)
+            await asyncio.sleep(5)
 
 
     async def generate_data(self):
         model = MancalaTransformer.from_config(self.model_config).to(self.device)
+        model.eval()
         await self.load_model(model)
 
         while True:

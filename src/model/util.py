@@ -53,7 +53,7 @@ class RMSNorm(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(self, d_model: int, n_heads: int, dropout: float = 0.0):
         super(Attention, self).__init__()
         assert d_model % n_heads == 0
 
@@ -64,6 +64,8 @@ class Attention(nn.Module):
         self.W_k = nn.Linear(d_model, d_model, bias=False)
         self.W_v = nn.Linear(d_model, d_model, bias=False)
 
+        self.dropout = nn.Dropout(dropout)
+
         self.W_o = nn.Linear(d_model, d_model)
 
     def forward(self, x: FloatTensor) -> FloatTensor:
@@ -73,21 +75,26 @@ class Attention(nn.Module):
 
         return self.W_o(
             rearrange(
-                F.softmax((q @ k.transpose(-2, -1)) / self.scale, dim=-1) @ v, "b n l d -> b l (n d)"
+                self.dropout(F.softmax((q @ k.transpose(-2, -1)) / self.scale, dim=-1)) @ v, "b n l d -> b l (n d)"
             )
         )
 
 
 class Block(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_hidden: Optional[int] = None, norm_eps: float = 1e-6):
+    def __init__(
+            self, d_model: int, n_heads: int,
+            attn_dropout: float = 0.0, ffn_dropout: float = 0.0,
+            d_hidden: Optional[int] = None, norm_eps: float = 1e-6
+    ):
         super(Block, self).__init__()
-        self.attn = Attention(d_model, n_heads)
+        self.attn = Attention(d_model, n_heads, dropout=attn_dropout)
         self.attn_norm = RMSNorm(d_model, eps=norm_eps)
 
+        self.ffn_dropout = nn.Dropout(ffn_dropout)
         self.ffn = SwiGLU(d_model, d_hidden)
         self.ffn_norm = RMSNorm(d_model, eps=norm_eps)
 
     def forward(self, x: FloatTensor) -> FloatTensor:
         x = x + self.attn(self.attn_norm(x))
 
-        return x + self.ffn(self.ffn_norm(x))
+        return x + self.ffn_dropout(self.ffn(self.ffn_norm(x)))
