@@ -146,7 +146,7 @@ class Trainer:
                 opt.step()
 
             await self.save_model(model)
-            await asyncio.sleep(15)
+            await asyncio.sleep(5)
 
 
     async def generate_data(self):

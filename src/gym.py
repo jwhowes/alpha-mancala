@@ -15,6 +15,15 @@ class State:
     score: LongTensor
     flipped: bool = False
 
+    def display(self, player: 0 | 1):
+        if player == 0:
+            print("\t".join([str(p.item()) for p in self.pits[1]]))
+            print("\t".join([str(p.item()) for p in self.pits[0]]))
+        else:
+            print("\t".join([str(p.item()) for p in self.pits[0]][::-1]))
+            print("\t".join([str(p.item()) for p in self.pits[1]][::-1]))
+        print(f"{str(self.score[player].item())}\t{str(self.score[1 - player].item())}")
+
     def step(self, action: int) -> State:
         assert not self.terminal, "Cannot perform action on a terminal property"
         assert 0 <= action < NUM_PITS, "Action out of range"
@@ -27,20 +36,19 @@ class State:
 
         side = 0
         while count > 0:
-            action += 1
+            action += -2 * side + 1
 
-            if action < NUM_PITS:
+            if 0 <= action < NUM_PITS:
                 pits[side, action] += 1
                 count -= 1
-            else:
-                if side == 0:
-                    score[0] += 1
-                    count -= 1
+            elif action == 6 and side == 0:
+                score[0] += 1
+                count -= 1
 
+            if not (-1 <= action <= 6):
                 side = 1 - side
-                action = 0
 
-        if side == 0 and action < NUM_PITS and pits[0, action] == 1:
+        if side == 0 and action < NUM_PITS and pits[0, action] == 1 and pits[1, action] > 0:
             score[0] += pits[0, action] + pits[1, action]
             pits[0, action] = 0
             pits[1, action] = 0
@@ -52,7 +60,7 @@ class State:
             pits[1] = 0
         elif side == 1 or action < NUM_PITS:
             flipped = True
-            pits = pits[[1, 0]]
+            pits = torch.flip(pits[[1, 0]], dims=(1,))
             score = score[[1, 0]]
 
         return State(pits=pits, score=score, flipped=flipped)
@@ -77,3 +85,8 @@ class State:
 
     def illegal_moves(self) -> BoolTensor:
         return self.pits[0] == 0
+
+
+if __name__ == "__main__":
+    state = State.initial()
+    print(state.step(5))

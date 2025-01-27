@@ -150,7 +150,7 @@ class MCTS:
             sims_per_move: float,
             explore_coeff: float,
             virtual_loss: float,
-            device: torch.device
+            device: torch.device = torch.device("cpu")
     ):
         self.device = device
 
@@ -188,7 +188,12 @@ class MCTS:
         return likelihood / likelihood.sum()
 
     def step(self, action: int):
-        self.root = self.root.children[action]
+        if self.root.children is None:
+            self.root = Node(
+                self.root.state.step(action)
+            )
+        else:
+            self.root = self.root.children[action]
 
 
 @dataclass
