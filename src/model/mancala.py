@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import torch
 
 from torch import nn, LongTensor, FloatTensor
 from math import sqrt
 from typing import Tuple
 
+from .config import MancalaTransformerConfig
 from .. import NUM_PITS
 
 from .util import Block, SinusoidalEmbedding, RMSNorm
@@ -54,3 +57,11 @@ class MancalaTransformer(nn.Module):
         x = self.layers(x)
 
         return self.state_value_head(x[:, 0]).squeeze(-1), self.action_value_head(x[:, 1])
+
+    @staticmethod
+    def from_config(config: MancalaTransformerConfig):
+        return MancalaTransformer(
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            n_layers=config.n_layers
+        )

@@ -4,25 +4,32 @@ import asyncio
 import torch
 import torch.nn.functional as F
 import numpy as np
-import warnings
 
 from numpy.typing import NDArray
 from dataclasses import dataclass
-from tqdm import tqdm
 from typing import Optional, List
 
 from .gym import State
 from .model import MancalaTransformer
 from . import NUM_PITS
+from .util import Config
 
 
-NUM_THREADS: int = 32
-EXPLORE_CONST: float = 5.0
-VIRTUAL_LOSS: float = 3.0
+@dataclass
+class MCTSConfig(Config):
+    num_threads: int = 32
+    sims_per_move: int = 50
+
+    explore_coeff: float = 5.0
+    virtual_loss: float = 3.0
+    temperature: float = 1.0
 
 
 class ModelQueue:
-    def __init__(self):
+    def __init__(self, num_threads: int, device: torch.device):
+        self.num_threads = num_threads
+        self.device = device
+        
         self.queue = asyncio.Queue()
         self.queue_full = asyncio.Event()
         self.completed = asyncio.Event()
@@ -31,7 +38,7 @@ class ModelQueue:
     async def add_to_queue(self, state: Optional[State], thread_id: int):
         await self.queue.put((state, thread_id))
 
-        if self.queue.qsize() == NUM_THREADS:
+        if self.queue.qsize() == self.num_threads:
             self.queue_full.set()
 
     async def join(self):
@@ -54,10 +61,10 @@ class ModelQueue:
                 value, prior = model(
                     score=torch.stack([
                         state.score for state in states
-                    ]),
+                    ]).to(self.device),
                     pits=torch.stack([
                         state.pits for state in states
-                    ])
+                    ]).to(self.device)
                 )
 
                 for i, (state, thread_id) in enumerate(zip(states, thread_ids)):
@@ -81,7 +88,7 @@ class Node:
         self.num_visits: NDArray[np.int64] = np.zeros(NUM_PITS, dtype=np.int64)
         self.total_value: NDArray[np.float32] = np.zeros(NUM_PITS, dtype=np.float32)
 
-    async def search(self, thread_id: int, queue: ModelQueue) -> Optional[float]:
+    async def search(self, thread_id: int, queue: ModelQueue, virtual_loss: float = 3.0, explore_coeff: float = 5.0) -> Optional[float]:
         if self.state.terminal:
             await queue.add_to_queue(None, thread_id)
 
@@ -103,52 +110,69 @@ class Node:
 
             return value
 
-        if all([c.locked for c in self.children]) or all([c.state.terminal for c in self.children]):
+        if all([c.locked for c in self.children]):
             await queue.add_to_queue(None, thread_id)
 
             return None
 
         quality = (
                 np.nan_to_num(self.total_value / self.num_visits) +
-                EXPLORE_CONST * self.prior * np.sqrt(self.num_visits.sum()) / (1 + self.num_visits)
+                explore_coeff * self.prior * np.sqrt(self.num_visits.sum()) / (1 + self.num_visits)
         )
 
         child_idx = quality.argmax()
-        self.num_visits[child_idx] += VIRTUAL_LOSS
-        self.total_value[child_idx] -= VIRTUAL_LOSS
+        self.num_visits[child_idx] += virtual_loss
+        self.total_value[child_idx] -= virtual_loss
 
-        value = await self.children[child_idx].search(thread_id, queue)
+        value = await self.children[child_idx].search(thread_id, queue, virtual_loss, explore_coeff)
+
+        self.num_visits[child_idx] -= virtual_loss
+        self.total_value[child_idx] += virtual_loss
 
         if value is not None:
-            self.num_visits[child_idx] += 1 - VIRTUAL_LOSS
+            self.num_visits[child_idx] += 1
 
             if self.children[child_idx].state.flipped:
                 value = -value
 
-            self.total_value[child_idx] += value + VIRTUAL_LOSS
+            self.total_value[child_idx] += value
 
         return value
 
 
 
 class MCTS:
-    def __init__(self, model: MancalaTransformer, temperature: float = 1.0, sims_per_move: int = 1000):
+    def __init__(
+            self,
+            model: MancalaTransformer,
+            num_threads: int,
+            temperature: float,
+            sims_per_move: float,
+            explore_coeff: float,
+            virtual_loss: float,
+            device: torch.device
+    ):
+        self.device = device
+
         self.model = model
+        self.num_threads = num_threads
+        self.recip_temperature = 1.0 / temperature
+        self.sims_per_move = sims_per_move
+        self.explore_coeff = explore_coeff
+        self.virtual_loss = virtual_loss
 
         self.submit_event = asyncio.Event()
 
-        self.recip_temperature = 1.0 / temperature
-        self.sims_per_move = sims_per_move
 
         self.root = Node(
             state=State.initial()
         )
 
     async def simulation(self) -> None:
-        queue = ModelQueue()
+        queue = ModelQueue(num_threads=self.num_threads, device=self.device)
 
         workers = [
-            self.root.search(i, queue) for i in range(NUM_THREADS)
+            self.root.search(i, queue, self.virtual_loss, self.explore_coeff) for i in range(self.num_threads)
         ]
 
         asyncio.create_task(queue.process_queue(self.model))
@@ -173,18 +197,23 @@ class GameHistory:
     pits: NDArray[np.int64]
 
     mcts_probs: NDArray[np.float32]
-
     results: NDArray[np.float32]
 
 
-async def self_play(model: MancalaTransformer) -> GameHistory:
-    mcts = MCTS(model, sims_per_move=50)
+async def self_play(model: MancalaTransformer, config: MCTSConfig, device: torch.device) -> GameHistory:
+    mcts = MCTS(
+        model,
+        num_threads=config.num_threads,
+        sims_per_move=config.sims_per_move,
+        temperature=config.temperature,
+        explore_coeff=config.explore_coeff,
+        virtual_loss=config.virtual_loss,
+        device=device
+    )
 
     states: List[State] = []
     priors: List[NDArray[np.float32]] = []
     results: List[int] = []
-
-    pbar = tqdm()
     while not mcts.root.state.terminal:
         states.append(mcts.root.state)
 
@@ -193,8 +222,6 @@ async def self_play(model: MancalaTransformer) -> GameHistory:
 
         action = np.random.multinomial(1, prior).argmax()
         mcts.step(action)
-
-        pbar.update()
 
     result = mcts.root.state.value
     assert result is not None
@@ -214,14 +241,3 @@ async def self_play(model: MancalaTransformer) -> GameHistory:
         mcts_probs=np.stack(priors).astype(np.float32),
         results=np.stack(results).astype(np.float32)
     )
-
-
-if __name__ == "__main__":
-    warnings.simplefilter("ignore")
-
-    model = MancalaTransformer(256, 4, 4)
-
-    history = asyncio.run(self_play(model))
-
-    print(history.results)
-    print(history.scores[-1])
