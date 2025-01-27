@@ -108,7 +108,7 @@ class Trainer:
         )
 
         while True:
-            if len(self.queue) < self.train_config.queue_size:
+            if len(self.queue) < self.train_config.queue_min:
                 await asyncio.sleep(1)
                 continue
 
