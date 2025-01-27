@@ -36,12 +36,14 @@ def train(ctx, resume: bool):
 
 
 @cli.command()
+@click.option("--computer-first", is_flag=True, default=True, show_default=True)
 @click.pass_context
-def play(ctx):
+def play(ctx, computer_first: bool):
     asyncio.run(play_base(
         ctx.obj["model_config"],
         ctx.obj["mcts_config"],
-        ctx.obj["exp_dir"]
+        ctx.obj["exp_dir"],
+        computer_first=computer_first
     ))
 
 

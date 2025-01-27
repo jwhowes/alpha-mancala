@@ -8,7 +8,8 @@ from .model import MancalaTransformerConfig, MancalaTransformer
 async def play(
         model_config: MancalaTransformerConfig,
         mcts_config: MCTSConfig,
-        exp_dir: str
+        exp_dir: str,
+        computer_first: bool = True
 ):
     model = MancalaTransformer.from_config(model_config)
 
@@ -27,7 +28,7 @@ async def play(
         **mcts_config.__dict__
     )
 
-    computer_move = False
+    computer_move = computer_first
     while not mcts.root.state.terminal:
         mcts.root.state.display(int(computer_move))
 
