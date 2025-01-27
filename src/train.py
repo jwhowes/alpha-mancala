@@ -20,6 +20,7 @@ class TrainConfig(Config):
     batch_size: int = 32
 
     queue_size: int = 16
+    queue_min: int = 4
 
     data_dir: str = "data"
 
@@ -107,7 +108,7 @@ class Trainer:
         )
 
         while True:
-            if len(self.queue) == 0:
+            if len(self.queue) < self.train_config.queue_size:
                 await asyncio.sleep(1)
                 continue
 
@@ -146,7 +147,7 @@ class Trainer:
                 opt.step()
 
             await self.save_model(model)
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
 
 
     async def generate_data(self):
